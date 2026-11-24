@@ -1,0 +1,85 @@
+bundle:
+  name: skypoints-loyalty-etl
+
+variables:
+  catalog:
+    description: Unity Catalog name
+    default: skypoints_dev
+  source_path:
+    description: Landing volume path for raw CSV and JSON files
+    default: /Volumes/skypoints_dev/bronze/landing_files
+  stale_threshold_days:
+    description: Days since last flight before marking a member stale
+    default: "90"
+
+resources:
+  jobs:
+    skypoints_daily_etl:
+      name: "[${bundle.target}] SkyPoints Daily Loyalty ETL"
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: "UTC"
+        pause_status: PAUSED
+
+      tasks:
+        - task_key: bronze_ingestion
+          notebook_task:
+            notebook_path: ./notebooks/01_bronze_ingestion.py
+            base_parameters:
+              catalog: ${var.catalog}
+              source_path: ${var.source_path}
+
+        - task_key: silver_transformation
+          depends_on:
+            - task_key: bronze_ingestion
+          notebook_task:
+            notebook_path: ./notebooks/02_silver_transformation.py
+            base_parameters:
+              catalog: ${var.catalog}
+              stale_threshold_days: ${var.stale_threshold_days}
+
+        - task_key: data_quality_validation
+          depends_on:
+            - task_key: silver_transformation
+          notebook_task:
+            notebook_path: ./notebooks/03_data_quality.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        - task_key: member_country_routing
+          depends_on:
+            - task_key: data_quality_validation
+          notebook_task:
+            notebook_path: ./notebooks/04_member_country_routing.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        - task_key: redemption_processing
+          depends_on:
+            - task_key: bronze_ingestion
+          notebook_task:
+            notebook_path: ./notebooks/05_redemption_processing.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+        - task_key: gold_analytics
+          depends_on:
+            - task_key: member_country_routing
+            - task_key: redemption_processing
+          notebook_task:
+            notebook_path: ./notebooks/06_gold_processing.py
+            base_parameters:
+              catalog: ${var.catalog}
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalog: skypoints_dev
+
+  prod:
+    mode: production
+    variables:
+      catalog: skypoints_prod
+      source_path: /Volumes/skypoints_prod/bronze/landing_files
